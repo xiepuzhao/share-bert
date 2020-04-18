@@ -151,7 +151,7 @@ def train(args, train_dataset, model, tokenizer, entity_set, mention_set, config
         )
 
     # Train!
-    logger.info("***** Running recall training ******")
+    logger.info("****** Running recall training ******")
     logger.info("  Num examples = %d", len(train_dataset))
     logger.info("  Num Epochs = %d", args.num_train_epochs)
     logger.info("  Instantaneous batch size per GPU = %d", args.per_gpu_train_recall_batch_size)
