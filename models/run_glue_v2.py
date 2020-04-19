@@ -348,8 +348,9 @@ def train(args, train_dataset, model, tokenizer, entity_set, mention_set, config
             pad_token_segment_id=4 if args.model_type in ["xlnet"] else 0,
         )
 
-        if args.local_rank == 0 and not evaluate:
-            torch.distributed.barrier()  # Make sure only the first process in distributed training process the dataset, and the others will use the cache
+        # if args.local_rank == 0 and not evaluate:
+        #     torch.distributed.barrier()
+        # Make sure only the first process in distributed training process the dataset, and the others will use the cache
 
         # Convert to Tensors and build dataset,创建tensor时默认是不可求导的，即requires_grad属性为false
         output_mode = "classification"
@@ -411,7 +412,7 @@ def train(args, train_dataset, model, tokenizer, entity_set, mention_set, config
                     if (
                             args.local_rank == -1 and args.evaluate_during_training
                     ):  # Only evaluate when single GPU otherwise metrics may not average well
-                        results = evaluate(args, model, tokenizer)
+                        results = evaluate(args, model, tokenizer, recall=False)
                         for key, value in results.items():
                             eval_key = "eval_rank{}".format(key)
                             logs[eval_key] = value
@@ -423,8 +424,8 @@ def train(args, train_dataset, model, tokenizer, entity_set, mention_set, config
                     logging_rank_loss = tr_rank_loss
 
                     for key, value in logs.items():
-                        tb_writer.add_scalar(key, value, global_step)
-                    print(json.dumps({**logs, **{"step": global_step}}))
+                        tb_writer.add_scalar(key, value, global_rank_step)
+                    # print(json.dumps({**logs, **{"step": global_step}}))
 
                 if args.local_rank in [-1, 0] and args.save_steps > 0 and global_recall_step % args.save_steps == 0:
                     # Save model checkpoint
@@ -445,6 +446,9 @@ def train(args, train_dataset, model, tokenizer, entity_set, mention_set, config
                     torch.save(optimizer.state_dict(), os.path.join(output_dir, "optimizer.pt"))
                     torch.save(scheduler.state_dict(), os.path.join(output_dir, "scheduler.pt"))
                     logger.info("Saving optimizer and scheduler states to %s", output_dir)
+                    # for key, value in logs.items():
+                    #     with open(os.path.join(output_dir, "results.txt")) as f:
+                    #         f.write(str(key, value))
 
             if args.max_steps > 0 and global_step > args.max_steps:
                 epoch_iterator.close()
@@ -456,17 +460,20 @@ def train(args, train_dataset, model, tokenizer, entity_set, mention_set, config
     if args.local_rank in [-1, 0]:
         tb_writer.close()
 
-    return global_step, (tr_recall_loss+tr_rank_loss) / global_step
+    return global_rank_step, tr_rank_loss / global_rank_step
 
 import csv
 
 
-def evaluate(args, model, tokenizer, prefix="", recall=True):
+# todo: 把evaluate的参数进行调整
+# recall 为True，验证recall的准确率
+def evaluate(args, model, tokenizer, recall, prefix=" "):
     # 建立从mention_id到label_id的集合
     lable_list = []
     # with open('/home/puzhao_xie/entity-linking-task/share-bert/models/dev.tsv', encoding='utf-8-sig') as f:
-    with open('/home/dc2-user/share-bert/models/dev.tsv', encoding='utf-8-sig') as f:
-        for line in list(csv.reader(f, delimiter="\t", quotechar=None))[1:]:
+    # todo:把dev文件的读取放到load_and_cache函数里面
+    with open(args.data_dir+'/dev.tsv', encoding='utf-8-sig') as f:
+        for line in list(csv.reader(f, delimiter="\t", quotechar=None)):
             lable_list.append(line[0])
     # rightnum = 0
     total_num = 0
@@ -501,7 +508,7 @@ def evaluate(args, model, tokenizer, prefix="", recall=True):
     nb_eval_rank_steps = 0
     # preds = None
     # out_label_ids = None
-    preds = torch.empty(0)
+    preds_recall = torch.empty(0)
     labels = torch.empty(0)
     mention_ids = torch.empty(0)
     preds_rank = None
@@ -517,18 +524,24 @@ def evaluate(args, model, tokenizer, prefix="", recall=True):
             outputs = model(**inputs)
             tmp_eval_loss, logits = outputs[:2]
             eval_recall_loss += tmp_eval_loss
-            if preds.shape[0] == 0 and labels.shape[0] == 0:
-                preds = logits
+            if preds_recall.shape[0] == 0 and labels.shape[0] == 0:
+                preds_recall = logits
                 labels = inputs["labels"]
                 mention_ids = batch[4]
             else:
-                preds = torch.cat((preds, logits), dim=0)
+                preds_recall = torch.cat((preds_recall, logits), dim=0)
                 labels = torch.cat((labels, inputs["labels"]), dim=0)
                 mention_ids = torch.cat((mention_ids, batch[4]), dim=0)
 
         nb_eval_recall_steps += 1
-    _, index = torch.sort(preds, dim=1, descending=True)
+    _, index = torch.sort(preds_recall, dim=1, descending=True)
     index = index[:, :64]
+    # print("未修改的indextop10 mention")
+    # print(index[:10, :])
+    # print("mention_id")
+    # print(mention_ids[:10])
+    # print("label")
+    # print(labels[:10])
     if recall is True:
         for id in range(index.shape[0]):
             if torch.sum(torch.eq(index[id, :], labels[id].item())).item() == 0:
@@ -536,7 +549,8 @@ def evaluate(args, model, tokenizer, prefix="", recall=True):
             else:
                 recall_num += 1
                 total_num += 1
-    if recall is False:
+    # todo:做evaluation的时候是否可以对candidate set 做替换
+    else:
         for id in range(index.shape[0]):
             if torch.sum(torch.eq(index[id, :], labels[id].item())).item() == 0:
                 total_num += 1
@@ -552,6 +566,8 @@ def evaluate(args, model, tokenizer, prefix="", recall=True):
                         index[id, num2] = index[id, 0] - index[id, num2]
                         index[id, 0] = index[id, 0] - index[id, num2]
                         break
+        print("修改后的index top10 对应的mention")
+        print(index[:10, :])
 
         examples = []
         candidate_set = index.detach().cpu().numpy()
@@ -563,6 +579,8 @@ def evaluate(args, model, tokenizer, prefix="", recall=True):
                 entity_text = entity_set[candidate]
                 mention_text = mention_set[mention_ids[num]]
                 if num1 == 0:
+                    print("mention_text")
+                    print(mention_text)
                     examples.append(LinkingExample(guid='data', text_a=mention_text, text_b=entity_text,
                                                    label='1', mention_id=mention_ids[num]))
                 else:
@@ -617,10 +635,12 @@ def evaluate(args, model, tokenizer, prefix="", recall=True):
                 preds_rank = np.append(preds_rank, logits.detach().cpu().numpy(), axis=0)
                 # out_label_ids = np.append(out_label_ids, inputs["labels"].detach().cpu().numpy(), axis=0)
         # nb_eval_steps += 1
-        preds_list = preds[:, 1].tolist()
+        preds_list = preds_rank[:, 1].tolist()
         label_set = []
         for num in mention_ids:
             label_set.append(lable_list[num])
+        # print("label_set")
+        # print(label_set[0])
         # print(label_set)
         # print(candidate_set)
         for i in range(len(candidate_set)):
@@ -731,7 +751,7 @@ def load_and_cache_examples(args, tokenizer, evaluate=False):
     entityset = []
     documents = {}
     # with open('/home/puzhao_xie/entity-linking-task/zero-shot-dataset/Wikia/zeshel/documents/military.json', 'r') as f:
-    with open('/home/dc2-user/share-bert/data/military.json', 'r') as f:
+    with open(args.data_dir+'/military.json', 'r') as f:
         while True:
             line = f.readline()
             if line:
@@ -744,7 +764,7 @@ def load_and_cache_examples(args, tokenizer, evaluate=False):
     mentions = []
     if evaluate:
         # with open('/home/puzhao_xie/entity-linking-task/zero-shot-dataset/Wikia/zeshel/mentions/heldout_train_unseen.json') as f:
-        with open('/home/dc2-user/share-bert/data/heldout_train_unseen.json') as f:
+        with open(args.data_dir+'/heldout_train_unseen.json') as f:
             while True:
                 line = f.readline()
                 if line:
@@ -756,7 +776,7 @@ def load_and_cache_examples(args, tokenizer, evaluate=False):
                     break
     if not evaluate:
         # with open('/home/puzhao_xie/entity-linking-task/zero-shot-dataset/Wikia/zeshel/mentions/train.json') as f:
-        with open('/home/dc2-user/share-bert/data/train.json') as f:
+        with open(args.data_dir+'/train.json') as f:
             while True:
                 line = f.readline()
                 if line:
@@ -1129,7 +1149,7 @@ def main():
 
             model = model_class.from_pretrained(checkpoint)
             model.to(args.device)
-            result = evaluate(args, model, tokenizer, prefix=prefix)
+            result = evaluate(args, model, tokenizer, recall=False, prefix=prefix)
             result = dict((k + "_{}".format(global_step), v) for k, v in result.items())
             results.update(result)
 
