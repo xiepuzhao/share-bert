@@ -1,8 +1,14 @@
+
+# todo:动态调整candidate set的大小
+# todo:搞清楚seen和unseen之间的关系，从集合角度
+# todo:考虑加入mention string和entity title,在下一个branch里面实现验证
+
 from transformers import BertPreTrainedModel, BertModel
 from torch import nn
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_callable
 import torch
 from torch.nn import CrossEntropyLoss
+from bert_model import BertSpecificModel
 
 BERT_INPUTS_DOCSTRING = r"""
     Args:
@@ -73,7 +79,7 @@ class EntityRecallRank(BertPreTrainedModel):
         super().__init__(config)
         # 这里num_labels的数量应为entity_set中实体的数量
         self.num_labels = config.num_labels
-        self.bert = BertModel(config)
+        self.bert = BertSpecificModel(config)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         self.recall_classifier = nn.Linear(config.hidden_size, config.entity_num)
         # 利用从文件读入的entity_embedding对recall_classifier的权重进行初始化
@@ -104,6 +110,8 @@ class EntityRecallRank(BertPreTrainedModel):
                 position_ids=position_ids,
                 head_mask=head_mask,
                 inputs_embeds=inputs_embeds,  # shape(104520, 768)
+                recall=True,
+                rank=False,
             )
             # Sequence of hidden-states at the output of the last layer of the model
             # shape:(batch_size, sequence_length, hidden_size)
@@ -134,6 +142,8 @@ class EntityRecallRank(BertPreTrainedModel):
                 position_ids=position_ids,
                 head_mask=head_mask,
                 inputs_embeds=inputs_embeds,  # shape(104520, 768)
+                recall=False,
+                rank=True,
             )
 
             # shape:(batch_size, hidden_size)
