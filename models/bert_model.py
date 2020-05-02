@@ -420,8 +420,8 @@ class PreTrainedSpecificModel(nn.Module, ModuleUtilsMixin):
             new_state_dict = torch.load(resolved_archive_file, map_location="cpu")
             old_keys = []
             new_keys = []
-            for key in new_state_dict.keys():
-                print(key)
+            # for key in new_state_dict.keys():
+            #     print(key)
             for key in state_dict.keys():
                 new_key = None
                 if "specific_recall_layer" in key:
@@ -1415,16 +1415,16 @@ class BertSpecificModel(BertSpecificPreTrainedModel):
         return outputs  # sequence_output, pooled_output, (hidden_states), (attentions)
 
 
-bert_dir = '/home/puzhao_xie/entity-linking-task/candidate_generation/sentence_transformers/output/training_nli_/home/puzhao_xie/.cache/torch/sentence_transformers/public.ukp.informatik.tu-darmstadt.de_reimers_sentence-transformers_v0.2_bert-base-nli-stsb-mean-tokens.zip/0_BERT-2020-03-30_23-19-16/0_BERT'
-tokenizer = BertTokenizer.from_pretrained(bert_dir)
-config = BertConfig.from_pretrained(
-        bert_dir,
-        output_hidden_states=True,
-        num_hidden_layers=11,
-    )
-bertSpecificModel = BertSpecificModel(config=config)
-bertSpecificModel = bertSpecificModel.from_pretrained(pretrained_model_name_or_path=bert_dir, config=config, state_dict=bertSpecificModel.state_dict())
-print(bertSpecificModel.state_dict().keys())
+# bert_dir = '/home/puzhao_xie/entity-linking-task/candidate_generation/sentence_transformers/output/training_nli_/home/puzhao_xie/.cache/torch/sentence_transformers/public.ukp.informatik.tu-darmstadt.de_reimers_sentence-transformers_v0.2_bert-base-nli-stsb-mean-tokens.zip/0_BERT-2020-03-30_23-19-16/0_BERT'
+# tokenizer = BertTokenizer.from_pretrained(bert_dir)
+# config = BertConfig.from_pretrained(
+#         bert_dir,
+#         output_hidden_states=True,
+#         num_hidden_layers=11,
+#     )
+# bertSpecificModel = BertSpecificModel(config=config)
+# bertSpecificModel = bertSpecificModel.from_pretrained(pretrained_model_name_or_path=bert_dir, config=config, state_dict=bertSpecificModel.state_dict())
+# print(bertSpecificModel.state_dict().keys())
 
 
 
