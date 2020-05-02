@@ -190,6 +190,7 @@ def train(args, train_dataset, model, tokenizer, entity_set, mention_set, config
         epochs_trained, int(args.num_train_epochs), desc="Epoch", disable=args.local_rank not in [-1, 0],
     )
     set_seed(args)  # Added here for reproductibility
+    training_epoch = 1
     for _ in train_iterator:  # 遍历epoch
         epoch_iterator = tqdm(train_dataloader, desc="Iteration", disable=args.local_rank not in [-1, 0])
         for step, batch in enumerate(epoch_iterator):  # 遍历batch
@@ -212,6 +213,7 @@ def train(args, train_dataset, model, tokenizer, entity_set, mention_set, config
             inputs["recall"] = True
             inputs["rank"] = False
             outputs = model(**inputs)
+            # torch.cuda.empty_cache()
             loss = outputs[0]  # model outputs are always tuple in transformers (see doc)
 
             if args.n_gpu > 1:
@@ -256,9 +258,9 @@ def train(args, train_dataset, model, tokenizer, entity_set, mention_set, config
                         tb_writer.add_scalar(key, value, global_recall_step)
                     # print(json.dumps({**logs, **{"step": global_step}}))
 
-        preds = torch.empty(0)
-        labels = torch.empty(0)
-        mention_ids = torch.empty(0)
+        preds = None
+        labels = None
+        mention_ids = None
         for step, batch in enumerate(epoch_iterator):  # 重新遍历batch
 
             # Skip past any already trained steps if resuming training
@@ -280,48 +282,45 @@ def train(args, train_dataset, model, tokenizer, entity_set, mention_set, config
                 inputs["recall"] = True
                 inputs["rank"] = False
                 outputs = model(**inputs)
-                loss = outputs[0]  # model outputs are always tuple in transformers (see doc)
+                # loss = outputs[0]  # model outputs are always tuple in transformers (see doc)
                 logits = outputs[1]  # shape(batch_size, entity_num)
-                if preds.shape[0] == 0 and labels.shape[0] == 0:
-                    preds = logits
-                    labels = inputs["labels"]
-                    mention_ids = batch[4]
+                if preds is None and labels is None:
+                    preds = logits.detach().cpu().numpy()
+                    labels = inputs["labels"].detach().cpu().numpy()
+                    mention_ids = batch[4].detach().cpu().numpy()
                 else:
-                    preds = torch.cat((preds, logits), dim=0)
-                    labels = torch.cat((labels, inputs["labels"]), dim=0)
-                    mention_ids = torch.cat((mention_ids, batch[4]), dim=0)
-        # preds = preds.detach().cpu().numpy()
-        # preds = preds.tolist()
-
-        _, index = torch.sort(preds, dim=1, descending=True)
+                    preds = np.append(preds, logits.detach().cpu().numpy(), axis=0)
+                    labels = np.append(labels, inputs["labels"].detach().cpu().numpy(), axis=0)
+                    mention_ids = np.append(mention_ids, batch[4].detach().cpu().numpy(), axis=0)
+        # # preds = preds.detach().cpu().numpy()
+        # # preds = preds.tolist()
+        #
+        index = np.argsort(-preds, axis=1)
         # 截取top64
         index = index[:, :64]
-        # assert logits[0][index[0]] > logits[0][index[1]]
-        # todo:logits[index[0]]>logits[index[1]]
-        # print("index")
-        # print(index)
-        # 判断top64里面是否包含mention实际对应的label，没有则把头部的entity替换
-        # 保证top64里面第一个为gold label
+        # # assert logits[0][index[0]] > logits[0][index[1]]
+        # # todo:logits[index[0]]>logits[index[1]]
+        # # print("index")
+        # # print(index)
+        # # 判断top64里面是否包含mention实际对应的label，没有则把头部的entity替换
+        # # 保证top64里面第一个为gold label
         for id in range(index.shape[0]):
-            if torch.sum(torch.eq(index[id, :], labels[id].item())).item() == 0:
-                index[id, 0] = labels[id].item()
+            if labels[id] not in index[id, :]:
+                index[id, 0] = labels[id]
             else:
-                id_list = torch.eq(index[id, :], labels[id].item()).detach().cpu().numpy()
-                id_list = id_list.tolist()
-                for num2, s in enumerate(id_list):
-                    if s == 1:
+                for num2, s in enumerate(index[id, :]):
+                    if s == labels[id]:
                         index[id, 0] = index[id, 0] + index[id, num2]
                         index[id, num2] = index[id, 0] - index[id, num2]
                         index[id, 0] = index[id, 0] - index[id, num2]
                         break
-            # print("index1")
-            # print(index)
-
-        # entity ranking
+        #     # print("index1")
+        #     # print(index)
+        #
+        # # entity ranking
         examples = []
-        candidate_set = index.detach().cpu().numpy()
+        candidate_set = index
         candidate_set = candidate_set.tolist()
-        mention_ids = mention_ids.detach().cpu().numpy()
         mention_ids = mention_ids.tolist()
         # logger.info("candidate_set shape{},{}".format(len(candidate_set), len(candidate_set[0])))
         # logger.info("mention_id length".format(len(mention_ids)))
@@ -335,8 +334,16 @@ def train(args, train_dataset, model, tokenizer, entity_set, mention_set, config
                 else:
                     examples.append(LinkingExample(guid='data', text_a=mention_text, text_b=entity_text,
                                                    label='0', mention_id=mention_ids[num]))
-
-        features = convert_rank_examples_to_features(
+        cached_features_file = os.path.join(
+            args.data_dir,
+            "cached_{}_{}_{}.bin".format(
+                "rank",
+                "data",
+                training_epoch,
+            ),
+        )
+        training_epoch += 1
+        convert_rank_examples_to_features(
             examples,
             tokenizer,
             label_list=None,
@@ -346,6 +353,7 @@ def train(args, train_dataset, model, tokenizer, entity_set, mention_set, config
             pad_on_left=bool(args.model_type in ["xlnet"]),  # pad on the left for xlnet
             pad_token=tokenizer.convert_tokens_to_ids([tokenizer.pad_token])[0],
             pad_token_segment_id=4 if args.model_type in ["xlnet"] else 0,
+            cached_features_file=cached_features_file,
         )
 
         # if args.local_rank == 0 and not evaluate:
@@ -395,7 +403,7 @@ def train(args, train_dataset, model, tokenizer, entity_set, mention_set, config
                     scaled_loss.backward()
             else:
                 rank_loss.backward()
-            tr_rank_loss += rank_loss
+            tr_rank_loss += rank_loss.item()
             if (rank_step + 1) % args.gradient_accumulation_rank_steps == 0:
                 if args.fp16:
                     torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), args.max_grad_norm)
@@ -446,16 +454,16 @@ def train(args, train_dataset, model, tokenizer, entity_set, mention_set, config
                     torch.save(optimizer.state_dict(), os.path.join(output_dir, "optimizer.pt"))
                     torch.save(scheduler.state_dict(), os.path.join(output_dir, "scheduler.pt"))
                     logger.info("Saving optimizer and scheduler states to %s", output_dir)
-                    # for key, value in logs.items():
-                    #     with open(os.path.join(output_dir, "results.txt")) as f:
-                    #         f.write(str(key, value))
-
-            if args.max_steps > 0 and global_step > args.max_steps:
-                epoch_iterator.close()
-                break
-        if args.max_steps > 0 and global_step > args.max_steps:
-            train_iterator.close()
-            break
+        #             for key, value in logs.items():
+        #                 with open(os.path.join(output_dir, "results.txt")) as f:
+        #                     f.write(str(key, value))
+        #
+        #     if args.max_steps > 0 and global_step > args.max_steps:
+        #         epoch_iterator.close()
+        #         break
+        # if args.max_steps > 0 and global_step > args.max_steps:
+        #     train_iterator.close()
+        #     break
 
     if args.local_rank in [-1, 0]:
         tb_writer.close()
@@ -508,9 +516,9 @@ def evaluate(args, model, tokenizer, recall, prefix=" "):
     nb_eval_rank_steps = 0
     # preds = None
     # out_label_ids = None
-    preds_recall = torch.empty(0)
-    labels = torch.empty(0)
-    mention_ids = torch.empty(0)
+    preds_recall = None
+    labels = None
+    mention_ids = None
     preds_rank = None
     for batch in tqdm(eval_dataloader, desc="Evaluating"):
         model.eval()
@@ -522,19 +530,23 @@ def evaluate(args, model, tokenizer, recall, prefix=" "):
             inputs["recall"] = True
             inputs["rank"] = False
             outputs = model(**inputs)
+            # torch.cuda.empty_cache()
             tmp_eval_loss, logits = outputs[:2]
-            eval_recall_loss += tmp_eval_loss
-            if preds_recall.shape[0] == 0 and labels.shape[0] == 0:
-                preds_recall = logits
-                labels = inputs["labels"]
-                mention_ids = batch[4]
+            # print("tmp_eval_loss")
+            # print(tmp_eval_loss)
+            eval_recall_loss += tmp_eval_loss.item()
+            if preds_recall is None and labels is None:
+                preds_recall = logits.detach().cpu().numpy()
+                labels = inputs["labels"].detach().cpu().numpy()
+                mention_ids = batch[4].detach().cpu().numpy()
             else:
-                preds_recall = torch.cat((preds_recall, logits), dim=0)
-                labels = torch.cat((labels, inputs["labels"]), dim=0)
-                mention_ids = torch.cat((mention_ids, batch[4]), dim=0)
+                preds_recall = np.append(preds_recall, logits.detach().cpu().numpy(), axis=0)
+                labels = np.append(labels, inputs["labels"].detach().cpu().numpy(), axis=0)
+                mention_ids = np.append(mention_ids, batch[4].detach().cpu().numpy(), axis=0)
 
         nb_eval_recall_steps += 1
-    _, index = torch.sort(preds_recall, dim=1, descending=True)
+    # _, index = torch.sort(preds_recall, dim=1, descending=True)
+    index = np.argsort(-preds_recall, axis=1)
     index = index[:, :64]
     # print("未修改的indextop10 mention")
     # print(index[:10, :])
@@ -544,35 +556,33 @@ def evaluate(args, model, tokenizer, recall, prefix=" "):
     # print(labels[:10])
     if recall is True:
         for id in range(index.shape[0]):
-            if torch.sum(torch.eq(index[id, :], labels[id].item())).item() == 0:
+            if labels[id] not in index[id, :]:
                 total_num += 1
             else:
                 recall_num += 1
                 total_num += 1
+        # a = recall_num/total_num
     # todo:做evaluation的时候是否可以对candidate set 做替换
     else:
         for id in range(index.shape[0]):
-            if torch.sum(torch.eq(index[id, :], labels[id].item())).item() == 0:
+            if labels[id] not in index[id, :]:
                 total_num += 1
-                index[id, 0] = labels[id].item()
+                index[id, 0] = labels[id]
             else:
                 recall_num += 1
                 total_num += 1
-                id_list = torch.eq(index[id, :], labels[id].item()).detach().cpu().numpy()
-                id_list = id_list.tolist()
-                for num2, s in enumerate(id_list):
-                    if s == 1:
+                for num2, s in enumerate(index[id, :]):
+                    if s == labels[id]:
                         index[id, 0] = index[id, 0] + index[id, num2]
                         index[id, num2] = index[id, 0] - index[id, num2]
                         index[id, 0] = index[id, 0] - index[id, num2]
                         break
-        print("修改后的index top10 对应的mention")
-        print(index[:10, :])
+        # print("修改后的index top10 对应的mention")
+        # print(index[:10, :])
 
         examples = []
-        candidate_set = index.detach().cpu().numpy()
+        candidate_set = index
         candidate_set = candidate_set.tolist()
-        mention_ids = mention_ids.detach().cpu().numpy()
         mention_ids = mention_ids.tolist()
         for num in range(len(candidate_set)):
             for num1, candidate in enumerate(candidate_set[num]):
@@ -685,6 +695,8 @@ def evaluate(args, model, tokenizer, recall, prefix=" "):
     return results
 
 # 读取training set 以及
+
+
 def load_and_cache_examples(args, tokenizer, evaluate=False):
     if args.local_rank not in [-1, 0] and not evaluate:
         torch.distributed.barrier()  # Make sure only the first process in distributed training process the dataset, and the others will use the cache
