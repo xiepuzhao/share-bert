@@ -2,6 +2,7 @@ import json
 import copy
 from transformers import is_tf_available
 import logging
+import torch
 # from DataSetProcessor import DataSetProcessor
 
 if is_tf_available():
@@ -231,6 +232,7 @@ def convert_rank_examples_to_features(
     pad_token=0,
     pad_token_segment_id=0,
     mask_padding_with_zero=True,
+    cached_features_file=None,
 ):
     """
     Loads a data file into a list of ``InputFeatures``
@@ -277,6 +279,8 @@ def convert_rank_examples_to_features(
         len_examples = len(examples)
         if ex_index % 10000 == 0:
             logger.info("Writing example %d/%d" % (ex_index, len_examples))
+            torch.save(features, cached_features_file)
+            features = []
 
         inputs = tokenizer.encode_plus(example.text_a, example.text_b, add_special_tokens=True, max_length=max_length,)
         input_ids, token_type_ids = inputs["input_ids"], inputs["token_type_ids"]
@@ -325,6 +329,7 @@ def convert_rank_examples_to_features(
                 input_ids=input_ids, attention_mask=attention_mask, token_type_ids=token_type_ids, label=label
             )
         )
+    torch.save(features, cached_features_file)
 
     if is_tf_available() and is_tf_dataset:
 
