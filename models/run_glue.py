@@ -22,7 +22,7 @@ from DataSetProcessor import DataSetProcessor
 from utils import LinkingExample
 import math
 from torch.nn import CrossEntropyLoss
-os.environ["CUDA_VISIBLE_DEVICES"] = "2"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1,2,3"
 
 from transformers import (
     WEIGHTS_NAME,
@@ -108,7 +108,6 @@ def train(args, train_dataset, model, tokenizer, entity_set, mention_set, config
     no_decay = ["bias", "LayerNorm.weight", "LayerNorm.bias"]
     # 对模型参数设置分组学习策略，每组以字典的形式给出,优化器将recall和rank阶段的参数全部装入
     # 因此无需对两个阶段分别设立优化器
-    # todo: 看两个阶段的loss量级是否相同，将loss,两阶段的准确率加入到tensorboard
     optimizer_grouped_parameters = [
         {
             "params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
@@ -204,7 +203,6 @@ def train(args, train_dataset, model, tokenizer, entity_set, mention_set, config
                 inputs["token_type_ids"] = (
                     batch[2] if args.model_type in ["bert", "xlnet", "albert"] else None
                 )  # XLM, DistilBERT, RoBERTa, and XLM-RoBERTa don't use segment_ids
-            # todo:要进行复位
             inputs["recall"] = True
             outputs = model(**inputs)
             loss = outputs[0]  # model outputs are always tuple in transformers (see doc)
@@ -217,7 +215,6 @@ def train(args, train_dataset, model, tokenizer, entity_set, mention_set, config
             _, index = torch.sort(logits, dim=1, descending=True)
             # 截取top64
             index = index[:, :64]
-            # todo:logits[index[0]]>logits[index[1]]
             # print("index")
             # print(index)
             # 判断top64里面是否包含mention实际对应的label，没有则把头部的entity替换
@@ -441,13 +438,11 @@ import csv
 
 
 def evaluate(args, model, tokenizer, prefix=""):
-    # 建立从mention_id到label_id的集合
     lable_list = []
     with open('/home/puzhao_xie/entity-linking-task/share-bert/models/dev.tsv', encoding='utf-8-sig') as f:
-        for line in list(csv.reader(f, delimiter="\t", quotechar=None))[1:]:
+        for line in list(csv.reader(f, delimiter="\t", quotechar=None)):
             lable_list.append(line[0])
     rightnum = 0
-    total_num = 0
     # Loop to handle MNLI double evaluation (matched, mis-matched)
     # eval_task_names = ("mnli", "mnli-mm") if args.task_name == "mnli" else (args.task_name,)
     eval_output_dir = args.output_dir
@@ -505,7 +500,6 @@ def evaluate(args, model, tokenizer, prefix=""):
                     else:
                         examples.append(LinkingExample(guid='data', text_a=mention_text, text_b=entity_text,
                                                        label='0', mention_id=mention_id))
-            print(examples[0].text_a)
             features = convert_rank_examples_to_features(
                 examples,
                 tokenizer,
@@ -551,31 +545,20 @@ def evaluate(args, model, tokenizer, prefix=""):
                 else:
                     preds = np.append(preds, logits.detach().cpu().numpy(), axis=0)
                     out_label_ids = np.append(out_label_ids, inputs["labels"].detach().cpu().numpy(), axis=0)
-        # nb_eval_steps += 1
-            preds_list = preds[:, 1].tolist()
-            label_set = []
-            for num in mention_id:
-                label_set.append(lable_list[num])
-            print(label_set)
-            print(candidate_set)
-            for i in range(len(candidate_set)):
-                # 截取64个候选实体
-                pred_each = preds_list[i*64:(i+1)*64]
-                # max_num_index_list = map(pred_each.index, heapq.nlargest(1, pred_each))
-                max_index = pred_each.index(max(pred_each))
-                if label_set[i] == candidate_set[i][max_index]:
-                    rightnum = rightnum + 1
-            total_num = total_num + len(label_set)
-            print('*****************************************')
-            print('rightnum'+str(rightnum))
-            print("totalnum"+str(total_num))
-            print('*****************************************')
-    # print('rightnum'+str(rightnum))
-    # print('totalnum'+str(len(lable_list)))
+        nb_eval_steps += 1
+    preds_list = preds[:, 1].tolist()
+    for i in range(len(lable_list)):
+        pred_each = preds_list[i*104520:(i+1)*104520]
+        # max_num_index_list = map(pred_each.index, heapq.nlargest(1, pred_each))
+        max_index = pred_each.index(max(pred_each))
+        if lable_list[i] == max_index:
+            rightnum = rightnum + 1
+    print('rightnum'+str(rightnum))
+    print('totalnum'+str(len(lable_list)))
     # print(preds_list)
     # print(preds)
     # print(out_label_ids)
-    # logger.info('length={}'.format(str(len(preds_list))))
+    logger.info('length={}'.format(str(len(preds_list))))
     eval_loss = eval_loss / nb_eval_steps
     if args.output_mode == "classification":
         preds = np.argmax(preds, axis=1)  # 返回每一行最大值对应的索引
@@ -818,7 +801,6 @@ def main():
     )
     parser.add_argument("--do_train", action="store_true", help="Whether to run training.")
     parser.add_argument("--do_eval", action="store_true", help="Whether to run eval on the dev set.")
-    # todo:在train的时候进行evaluate
     parser.add_argument(
         "--evaluate_during_training", action="store_true", help="Run evaluation during training at each logging step.",
     )
@@ -963,6 +945,8 @@ def main():
 
     args.model_type = args.model_type.lower()
     config_class, _, tokenizer_class = MODEL_CLASSES[args.model_type]
+    # entity_embedding = load_entity_embedding(args)
+    # model_class = EntityRecallRank(entity_embedding=entity_embedding)
     config = config_class.from_pretrained(
         args.config_name if args.config_name else args.model_name_or_path,
         num_labels=num_labels,
@@ -982,8 +966,6 @@ def main():
         config=config,
         cache_dir=args.cache_dir if args.cache_dir else None,
     )
-    # todo:根据args.do_train来判断
-    # entity_embedding = load_entity_embedding(args)
     # model.recall_classifier.weight = nn.Parameter(entity_embedding)
     if args.local_rank == 0:
         torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
