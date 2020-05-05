@@ -232,6 +232,8 @@ def convert_rank_examples_to_features(
     pad_token=0,
     pad_token_segment_id=0,
     mask_padding_with_zero=True,
+    cached_features_file=None,
+    num_examples=0,
 ):
     """
     Loads a data file into a list of ``InputFeatures``
@@ -274,7 +276,7 @@ def convert_rank_examples_to_features(
     label_map = {label: i for i, label in enumerate(label_list)}
 
     features = []
-    # logger.info("Writing example{}".format(num_examples))
+    logger.info("Writing example{}".format(num_examples))
     # logger.info("true example{}".format(len(examples)))
     for (ex_index, example) in enumerate(examples):
         len_examples = len(examples)
@@ -359,30 +361,3 @@ def convert_rank_examples_to_features(
         )
 
     return features
-
-
-def parallel(candidate_set, entity_set, mention_set, mention_ids, tokenizer, cached_features_file, num_examples):
-    logger.info("Writing example{}".format(num_examples))
-    examples = []
-    for num in range(len(candidate_set)):
-        for num1, candidate in enumerate(candidate_set[num]):
-            entity_text = entity_set[candidate]
-            mention_text = mention_set[mention_ids[num]]
-            if num1 == 0:
-                examples.append(LinkingExample(guid='data', text_a=mention_text, text_b=entity_text,
-                                               label='1', mention_id=mention_ids[num]))
-            else:
-                examples.append(LinkingExample(guid='data', text_a=mention_text, text_b=entity_text,
-                                               label='0', mention_id=mention_ids[num]))
-    features = convert_rank_examples_to_features(
-        examples,
-        tokenizer,
-        label_list=None,
-        task="rank",
-        max_length=512,
-        output_mode="classification",
-        pad_on_left=False,  # pad on the left for xlnet
-        pad_token=tokenizer.convert_tokens_to_ids([tokenizer.pad_token])[0],
-        pad_token_segment_id=0,
-    )
-    torch.save(features, cached_features_file)
