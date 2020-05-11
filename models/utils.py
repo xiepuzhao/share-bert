@@ -2,6 +2,7 @@ import json
 import copy
 from transformers import is_tf_available
 import logging
+import torch
 # from DataSetProcessor import DataSetProcessor
 
 if is_tf_available():
@@ -76,7 +77,7 @@ class InputFeatures(object):
         """Serializes this instance to a JSON string."""
         return json.dumps(self.to_dict(), indent=2, sort_keys=True) + "\n"
 
-# 需要分别设定函数用于处理recall和召回阶段的数据
+# 闇€瑕佸垎鍒瀹氬嚱鏁扮敤浜庡鐞唕ecall鍜屽彫鍥為樁娈电殑鏁版嵁
 
 
 def convert_recall_examples_to_features(
@@ -231,6 +232,7 @@ def convert_rank_examples_to_features(
     pad_token=0,
     pad_token_segment_id=0,
     mask_padding_with_zero=True,
+    num_examples=0,
 ):
     """
     Loads a data file into a list of ``InputFeatures``
@@ -263,7 +265,7 @@ def convert_rank_examples_to_features(
         # processor = DataSetProcessor()
         if label_list is None:
             label_list = []
-            for i in range(2):  # label的数量为64
+            for i in range(2):  # label閻ㄥ嫭鏆熼柌蹇庤礋64
                 label_list.append(str(i))
             logger.info("Using label list %s for task %s" % (label_list, task))
         if output_mode is None:
@@ -273,10 +275,14 @@ def convert_rank_examples_to_features(
     label_map = {label: i for i, label in enumerate(label_list)}
 
     features = []
+    logger.info("Writing example{}".format(num_examples))
+    # logger.info("true example{}".format(len(examples)))
     for (ex_index, example) in enumerate(examples):
         len_examples = len(examples)
-        if ex_index % 10000 == 0:
-            logger.info("Writing example %d/%d" % (ex_index, len_examples))
+        # if ex_index % 10000 == 0:
+        #     logger.info("Writing example %d/%d" % (ex_index, len_examples))
+            # torch.save(features, cached_features_file)
+            # features = []
 
         inputs = tokenizer.encode_plus(example.text_a, example.text_b, add_special_tokens=True, max_length=max_length,)
         input_ids, token_type_ids = inputs["input_ids"], inputs["token_type_ids"]
@@ -325,6 +331,7 @@ def convert_rank_examples_to_features(
                 input_ids=input_ids, attention_mask=attention_mask, token_type_ids=token_type_ids, label=label
             )
         )
+    # torch.save(features, cached_features_file)
 
     if is_tf_available() and is_tf_dataset:
 
@@ -353,3 +360,31 @@ def convert_rank_examples_to_features(
         )
 
     return features
+
+
+
+# def parallel(candidate_set, entity_set, mention_set, mention_ids, tokenizer, cached_features_file, num_examples):
+#     logger.info("Writing example{}".format(num_examples))
+#     examples = []
+#     for num in range(len(candidate_set)):
+#         for num1, candidate in enumerate(candidate_set[num]):
+#             entity_text = entity_set[candidate]
+#             mention_text = mention_set[mention_ids[num]]
+#             if num1 == 0:
+#                 examples.append(LinkingExample(guid='data', text_a=mention_text, text_b=entity_text,
+#                                                label='1', mention_id=mention_ids[num]))
+#             else:
+#                 examples.append(LinkingExample(guid='data', text_a=mention_text, text_b=entity_text,
+#                                                label='0', mention_id=mention_ids[num]))
+#     features = convert_rank_examples_to_features(
+#         examples,
+#         tokenizer,
+#         label_list=None,
+#         task="rank",
+#         max_length=512,
+#         output_mode="classification",
+#         pad_on_left=False,  # pad on the left for xlnet
+#         pad_token=tokenizer.convert_tokens_to_ids([tokenizer.pad_token])[0],
+#         pad_token_segment_id=0,
+#     )
+#     torch.save(features, cached_features_file)
