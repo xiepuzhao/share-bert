@@ -23,7 +23,7 @@ from utils import LinkingExample
 import math
 import multiprocessing
 from torch.nn import CrossEntropyLoss
-os.environ["CUDA_VISIBLE_DEVICES"] = "3,4"
+# os.environ["CUDA_VISIBLE_DEVICES"] = "3,4"
 
 from transformers import (
     WEIGHTS_NAME,
