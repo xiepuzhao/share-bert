@@ -250,7 +250,7 @@ def train(args, train_dataset, model, tokenizer, entity_set, mention_set, config
                     if (
                             args.local_rank == -1 and args.evaluate_during_training
                     ):  # Only evaluate when single GPU otherwise metrics may not average well
-                        results = evaluate(args, model, tokenizer, recall=False)
+                        results = evaluate(args, model, tokenizer, recall=True)
                         for key, value in results.items():
                             eval_key = "eval_recall{}".format(key)
                             logs[eval_key] = value
@@ -290,6 +290,11 @@ def train(args, train_dataset, model, tokenizer, entity_set, mention_set, config
 
 
 def training_rank(RankDataset, args, model, optimizer, scheduler, tb_writer, tokenizer):
+    if args.fp16:
+        try:
+            from apex import amp
+        except ImportError:
+            raise ImportError("Please install apex from https://www.github.com/nvidia/apex to use fp16 training.")
     global_rank_step = 0
     tr_rank_loss, logging_rank_loss = 0.0, 0.0
     train_rank_batch_size = args.per_gpu_train_rank_batch_size * max(1, args.n_gpu)
@@ -332,7 +337,7 @@ def training_rank(RankDataset, args, model, optimizer, scheduler, tb_writer, tok
             model.zero_grad()
             global_rank_step += 1
 
-            if args.local_rank in [-1,0] and args.logging_rank_steps > 0 and global_rank_step % args.logging_rank_steps == 0:
+            if args.local_rank in [-1, 0] and args.logging_rank_steps > 0 and global_rank_step % args.logging_rank_steps == 0:
                 logs = {}
                 if (
                         args.local_rank == -1 and args.evaluate_during_training
