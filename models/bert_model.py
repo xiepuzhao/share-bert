@@ -1,6 +1,6 @@
 
 
-from transformers import BertTokenizer, PreTrainedModel, PretrainedConfig
+from transformers import BertTokenizer, PreTrainedModel, PretrainedConfig, BertModel
 import torch
 import torch.nn as nn
 import os
@@ -15,6 +15,8 @@ from transformers.modeling_utils import ModuleUtilsMixin
 import re
 
 logger = logging.getLogger(__name__)
+
+# todo: 重写PreTrainedModel的from_pretrained方法
 
 
 class PreTrainedSpecificModel(nn.Module, ModuleUtilsMixin):
@@ -414,29 +416,47 @@ class PreTrainedSpecificModel(nn.Module, ModuleUtilsMixin):
         # Instantiate model.
         model = cls(config, *model_args, **model_kwargs)
 
+        # if state_dict is None and not from_tf:
+        #     try:
+        #         state_dict = torch.load(resolved_archive_file, map_location="cpu")
+        #     except Exception:
+        #         raise OSError(
+        #             "Unable to load weights from pytorch checkpoint file. "
+        #             "If you tried to load a PyTorch model from a TF 2.0 checkpoint, please set from_tf=True. "
+        #         )
+
         if state_dict is not None and not from_tf:
             # try:
                 # new_state_dict = state_dict
             new_state_dict = torch.load(resolved_archive_file, map_location="cpu")
             old_keys = []
             new_keys = []
-            for key in new_state_dict.keys():
-                print(key)
+            # print("state_dict keys")
+            # for key in state_dict.keys():
+            #     print(key)
+            # print("new state_dict keys")
+            # for key in new_state_dict.keys():
+            #     print(key)
             for key in state_dict.keys():
                 new_key = None
                 if "specific_recall_layer" in key:
                     num = re.findall(r"\d+", key)
                     new_key = key.replace("specific_recall_layer."+num[0], "layer."+str(11-int(num[0])))
+                    new_key = new_key[5:]
                     old_keys.append(key)
                     new_keys.append(new_key)
                 if "specific_rank_layer" in key:
                     num = re.findall(r"\d+", key)
                     new_key = key.replace("specific_rank_layer."+num[0], "layer."+str(11-int(num[0])))
+                    new_key = new_key[5:]
                     old_keys.append(key)
                     new_keys.append(new_key)
-                if key in new_state_dict.keys():
-                    state_dict[key] = new_state_dict[key]
+                # print("old keys and new keys")
+                if key[5:] in new_state_dict.keys():
+                    state_dict[key] = new_state_dict[key[5:]]
+                    # print("same keys {}".format(key))
             for old_key, new_key in zip(old_keys, new_keys):
+                # print("old key:{} new key:{}".format(old_key, new_key))
                 state_dict[old_key] = new_state_dict[new_key]
             # except Exception:
             #     raise OSError(
@@ -494,6 +514,7 @@ class PreTrainedSpecificModel(nn.Module, ModuleUtilsMixin):
                     state_dict, prefix, local_metadata, True, missing_keys, unexpected_keys, error_msgs
                 )
                 for name, child in module._modules.items():
+                    # print("name:{} child:{}".format(name, child))
                     if child is not None:
                         load(child, prefix + name + ".")
 
@@ -1103,8 +1124,10 @@ def top_k_top_p_filtering(logits, top_k=0, top_p=1.0, filter_value=-float("Inf")
 
 
 class BertSpecificEncoder(nn.Module):
+
     def __init__(self, config):
         super().__init__()
+        self.shared_layers = config.num_hidden_layers
         self.output_attentions = config.output_attentions
         self.output_hidden_states = config.output_hidden_states
         self.layer = nn.ModuleList([BertLayer(config) for _ in range(config.num_hidden_layers)])
@@ -1118,8 +1141,8 @@ class BertSpecificEncoder(nn.Module):
         head_mask=None,
         encoder_hidden_states=None,
         encoder_attention_mask=None,
-        recall = False,
-        rank = False,
+        recall=False,
+        rank=False,
     ):
         assert (rank ^ recall) is True
         all_hidden_states = ()
@@ -1140,8 +1163,10 @@ class BertSpecificEncoder(nn.Module):
                 if self.output_hidden_states:
                     all_hidden_states = all_hidden_states + (hidden_states,)
 
+                # print("length of head_mask{}".format(len(head_mask)))
+                # print(head_mask[0])
                 layer_outputs = layer_module(
-                    hidden_states, attention_mask, head_mask[i], encoder_hidden_states, encoder_attention_mask
+                    hidden_states, attention_mask, head_mask[i+self.shared_layers], encoder_hidden_states, encoder_attention_mask
                 )
                 hidden_states = layer_outputs[0]
 
@@ -1153,7 +1178,7 @@ class BertSpecificEncoder(nn.Module):
                     all_hidden_states = all_hidden_states + (hidden_states,)
 
                 layer_outputs = layer_module(
-                    hidden_states, attention_mask, head_mask[i], encoder_hidden_states, encoder_attention_mask
+                    hidden_states, attention_mask, head_mask[i+self.shared_layers], encoder_hidden_states, encoder_attention_mask
                 )
                 hidden_states = layer_outputs[0]
 
@@ -1392,7 +1417,7 @@ class BertSpecificModel(BertSpecificPreTrainedModel):
                 dtype=next(self.parameters()).dtype
             )  # switch to fload if need + fp16 compatibility
         else:
-            head_mask = [None] * self.config.num_hidden_layers
+            head_mask = [None] * 12
 
         embedding_output = self.embeddings(
             input_ids=input_ids, position_ids=position_ids, token_type_ids=token_type_ids, inputs_embeds=inputs_embeds
@@ -1415,16 +1440,23 @@ class BertSpecificModel(BertSpecificPreTrainedModel):
         return outputs  # sequence_output, pooled_output, (hidden_states), (attentions)
 
 
-bert_dir = '/home/puzhao_xie/entity-linking-task/candidate_generation/sentence_transformers/output/training_nli_/home/puzhao_xie/.cache/torch/sentence_transformers/public.ukp.informatik.tu-darmstadt.de_reimers_sentence-transformers_v0.2_bert-base-nli-stsb-mean-tokens.zip/0_BERT-2020-03-30_23-19-16/0_BERT'
-tokenizer = BertTokenizer.from_pretrained(bert_dir)
-config = BertConfig.from_pretrained(
-        bert_dir,
-        output_hidden_states=True,
-        num_hidden_layers=11,
-    )
-bertSpecificModel = BertSpecificModel(config=config)
-bertSpecificModel = bertSpecificModel.from_pretrained(pretrained_model_name_or_path=bert_dir, config=config, state_dict=bertSpecificModel.state_dict())
-print(bertSpecificModel.state_dict().keys())
+# bert_dir = '/home/puzhao_xie/entity-linking-task/candidate_generation/sentence_transformers/output/training_nli_/home/puzhao_xie/.cache/torch/sentence_transformers/public.ukp.informatik.tu-darmstadt.de_reimers_sentence-transformers_v0.2_bert-base-nli-stsb-mean-tokens.zip/0_BERT-2020-03-30_23-19-16/0_BERT'
+# tokenizer = BertTokenizer.from_pretrained(bert_dir)
+# config = BertConfig.from_pretrained(
+#         bert_dir,
+#         output_hidden_states=True,
+#         num_hidden_layers=12,
+#     )
+# bertSpecificModel = BertSpecificModel(config=config)
+# # # bertModel = BertModel(config=config)
+# bertModel = BertSpecificModel.from_pretrained(pretrained_model_name_or_path=bert_dir, config=config)
+# print(bertSpecificModel.state_dict())
+# bertSpecificModel = BertSpecificModel.from_pretrained(pretrained_model_name_or_path=bert_dir, config=config)
+# print(bertSpecificModel.state_dict())
+# with open(r"./")
+# for key in bertSpecificModel.named_parameters():
+#     print(key)
+#     # print(bertModel.named_parameters()[key])
 
 
 
