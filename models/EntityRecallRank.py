@@ -1,8 +1,14 @@
-from transformers import BertPreTrainedModel, BertModel
+
+# todo:动态调整candidate set的大小
+# todo:搞清楚seen和unseen之间的关系，从集合角度
+# todo:考虑加入mention string和entity title,在下一个branch里面实现验证
+
+from transformers import BertPreTrainedModel, BertModel, BertTokenizer, BertConfig
 from torch import nn
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_callable
 import torch
 from torch.nn import CrossEntropyLoss
+from bert_model import BertSpecificModel,PreTrainedSpecificModel,BertSpecificPreTrainedModel
 
 BERT_INPUTS_DOCSTRING = r"""
     Args:
@@ -68,14 +74,15 @@ BERT_START_DOCSTRING = r"""
     the pooled output) e.g. for GLUE tasks. """,
     BERT_START_DOCSTRING,
 )
-class EntityRecallRank(BertPreTrainedModel):
+class EntityRecallRank(BertSpecificPreTrainedModel):
     def __init__(self, config):
         super().__init__(config)
         # 这里num_labels的数量应为entity_set中实体的数量
         self.num_labels = config.num_labels
-        self.bert = BertModel(config)
+        # self.bert = BertModel(config)
+        self.bert = BertSpecificModel(config)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
-        self.recall_classifier = nn.Linear(config.hidden_size, config.entity_num)
+        self.recall_classifier = nn.Linear(config.hidden_size, 104520)
         # 利用从文件读入的entity_embedding对recall_classifier的权重进行初始化
         # self.recall_classifier.weight = nn.Parameter(entity_embedding)
         self.rank_classifier = nn.Linear(config.hidden_size, 2)
@@ -104,6 +111,8 @@ class EntityRecallRank(BertPreTrainedModel):
                 position_ids=position_ids,
                 head_mask=head_mask,
                 inputs_embeds=inputs_embeds,  # shape(104520, 768)
+                recall=True,
+                rank=False,
             )
             # Sequence of hidden-states at the output of the last layer of the model
             # shape:(batch_size, sequence_length, hidden_size)
@@ -134,6 +143,8 @@ class EntityRecallRank(BertPreTrainedModel):
                 position_ids=position_ids,
                 head_mask=head_mask,
                 inputs_embeds=inputs_embeds,  # shape(104520, 768)
+                recall=False,
+                rank=True,
             )
 
             # shape:(batch_size, hidden_size)
@@ -155,7 +166,20 @@ class EntityRecallRank(BertPreTrainedModel):
 
         return outputs
 
-
+# bert_dir = '/home/puzhao_xie/entity-linking-task/candidate_generation/sentence_transformers/output/training_nli_/home/puzhao_xie/.cache/torch/sentence_transformers/public.ukp.informatik.tu-darmstadt.de_reimers_sentence-transformers_v0.2_bert-base-nli-stsb-mean-tokens.zip/0_BERT-2020-03-30_23-19-16/0_BERT'
+# tokenizer = BertTokenizer.from_pretrained(bert_dir)
+# config = BertConfig.from_pretrained(
+#         bert_dir,
+#         output_hidden_states=True,
+#         num_hidden_layers=11,
+#     )
+# bertSpecificModel = EntityRecallRank(config=config)
+# # bertModel = BertModel(config=config)
+# # bertModel = bertModel.from_pretrained(pretrained_model_name_or_path=bert_dir, config=config)
+# bertSpecificModel = bertSpecificModel.from_pretrained(pretrained_model_name_or_path=bert_dir, config=config, state_dict=bertSpecificModel.state_dict())
+# # print(bertSpecificModel.state_dict()[])
+# for key in bertSpecificModel.named_parameters():
+#     print(key)
 
 
 
